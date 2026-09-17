@@ -14,6 +14,20 @@ tickers_input = st.text_input("Voer aandelen in (gescheiden door komma's):", def
 # Tickers omzetten naar een lijst
 ticker_list = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
 
+def get_signal_and_color(score):
+    """
+    Bepaalt het advies en de kleur/emoji op basis van de Totaal Score:
+    - 7.0 t/m 10.0 : BUY / LONG (Groen)
+    - 5.0 t/m 6.9  : WATCH (Oranje)
+    - Onder 5.0    : AVOID (Rood)
+    """
+    if score >= 7.0:
+        return "BUY / LONG 🟢", "#d4edda", "#155724" # Groen (Label, BG, Text)
+    elif score >= 5.0:
+        return "WATCH 🟠", "#fff3cd", "#856404"     # Oranje (Label, BG, Text)
+    else:
+        return "AVOID 🔴", "#f8d7da", "#721c24"     # Rood (Label, BG, Text)
+
 def calculate_composite_score(vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, stoch_d, put_call_ratio, short_float):
     """
     Berekent de Totaal Score (1-10) op basis van 4 gewogen pijlers:
@@ -97,9 +111,7 @@ def analyze_stock(symbol):
         if df.empty or len(df) < 30:
             return None
 
-        # -------------------------------------------------------------
-        # PUT/CALL RATIO BEREKENING (VIA INFO + FALLBACK NAAR OPTION CHAIN)
-        # -------------------------------------------------------------
+        # Put/Call Ratio Bepaling
         put_call_ratio = info.get('putCallRatio', None)
         pcr_source = "Info"
 
@@ -107,7 +119,6 @@ def analyze_stock(symbol):
             try:
                 options_dates = stock.options
                 if options_dates:
-                    # Eerstvolgende optie-expiratiedatum
                     near_option = stock.option_chain(options_dates[0])
                     calls = near_option.calls
                     puts = near_option.puts
@@ -129,7 +140,7 @@ def analyze_stock(symbol):
 
         short_float = info.get('shortPercentOfFloat', None)
 
-        # 1. Volume Ratio (vs 20-daags MA)
+        # 1. Volume Ratio
         avg_volume_20 = df['Volume'].rolling(window=20).mean().iloc[-1]
         current_volume = df['Volume'].iloc[-1]
         vol_ratio = current_volume / avg_volume_20 if avg_volume_20 > 0 else 1.0
@@ -143,7 +154,7 @@ def analyze_stock(symbol):
         rsi_val = df['RSI'].iloc[-1]
         rsi_prev = df['RSI'].iloc[-2]
 
-        # 3. Stochastic Oscillator (Daily & Hourly)
+        # 3. Stochastic Oscillator
         def calc_stoch(data, k_period=14, d_period=3):
             low_min = data['Low'].rolling(window=k_period).min()
             high_max = data['High'].rolling(window=k_period).max()
@@ -156,7 +167,6 @@ def analyze_stock(symbol):
         stoch_d = df['Stoch_%D'].iloc[-1]
         stoch_k_prev = df['Stoch_%K'].iloc[-2]
 
-        # Hourly Stochastic
         df_1h['Stoch_%K'], df_1h['Stoch_%D'] = calc_stoch(df_1h)
         stoch_1h_trend = "Stijgend 🟢" if df_1h['Stoch_%K'].iloc[-1] > df_1h['Stoch_%K'].iloc[-2] else "Dalend 🔴"
         stoch_1d_trend = "Stijgend 🟢" if stoch_k > stoch_k_prev else "Dalend 🔴"
@@ -191,7 +201,7 @@ def analyze_stock(symbol):
         else:
             candle_signal = f"Neutraal ➖ ({total_return_3d:.1f}%)"
 
-        # 6. AI Model Simulation Scores
+        # 6. AI Model Simulation
         mom_score = 5.0
         if macd_val > 0: mom_score += 1.5
         if stoch_k > stoch_d: mom_score += 1.5
@@ -206,10 +216,13 @@ def analyze_stock(symbol):
             vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, stoch_d, put_call_ratio, short_float
         )
 
+        signal, bg_color, text_color = get_signal_and_color(totaal_score)
+
         return {
             "Ticker": symbol,
             "Koers": f"${c1:.2f}",
             "Totaal Score": totaal_score,
+            "Advies": signal,
             "AI Ensemble": ensemble_score,
             "AI Momentum": round(mom_score, 1),
             "Volume Ratio": f"{vol_ratio:.2f}x",
@@ -230,7 +243,9 @@ def analyze_stock(symbol):
             "Tech Score": tech_score,
             "Volume Score": vol_score,
             "PCR Score": pcr_score,
-            "Sentiment Score": sent_score
+            "Sentiment Score": sent_score,
+            "Advies BG": bg_color,
+            "Advies Text": text_color
         }
     except Exception as e:
         return None
@@ -246,14 +261,14 @@ if ticker_list:
     if results:
         df_results = pd.DataFrame(results)
 
-        # Sorteren op de Totaal Score (hoogste bovenaan)
+        # Sorteren op Totaal Score (hoogste bovenaan)
         df_results = df_results.sort_values(by="Totaal Score", ascending=False)
 
         st.subheader("📊 Multi-Stock Scan Overzicht")
         
         # Weergave tabel voorbereiden
         display_cols = [
-            "Ticker", "Koers", "Totaal Score", "AI Ensemble", "AI Momentum", 
+            "Ticker", "Koers", "Totaal Score", "Advies", "AI Ensemble", "AI Momentum", 
             "Volume Ratio", "RSI (14)", "MACD Status", "Put/Call", 
             "Short Float", "Stoch 1H", "Stoch 1D", "3D Candles"
         ]
@@ -271,20 +286,26 @@ if ticker_list:
 
         st.divider()
 
-        # Inzoomen op 1 specifiek aandeel voor uitgebreide weergave
+        # Inzoomen op 1 specifiek aandeel
         selected_ticker = st.selectbox("Selecteer een aandeel voor gedetailleerde kaartweergave:", df_results["Ticker"])
         selected_data = next((item for item in results if item["Ticker"] == selected_ticker), None)
 
         if selected_data:
             st.write(f"### 🔍 Gedetailleerde Analyse voor {selected_ticker}")
             
+            # Gekleurde Advies Banner
+            st.markdown(f"""
+            <div style="background-color:{selected_data['Advies BG']}; color:{selected_data['Advies Text']}; padding:15px; border-radius:8px; font-size:20px; font-weight:bold; text-align:center; margin-bottom:15px;">
+                Totaal Score: {selected_data['Totaal Score']} / 10 — Advies: {selected_data['Advies']}
+            </div>
+            """, unsafe_allow_html=True)
+
             # Top Metrics
-            m1, m2, m3, m4, m5 = st.columns(5)
+            m1, m2, m3, m4 = st.columns(4)
             m1.metric("Koers", selected_data["Koers"])
-            m2.metric("Totaal Score", f"{selected_data['Totaal Score']} / 10")
-            m3.metric("AI Ensemble", f"{selected_data['AI Ensemble']} / 10")
-            m4.metric("Volume Ratio", selected_data["Volume Ratio"])
-            m5.metric("RSI (14)", selected_data["RSI (14)"])
+            m2.metric("AI Ensemble", f"{selected_data['AI Ensemble']} / 10")
+            m3.metric("Volume Ratio", selected_data["Volume Ratio"])
+            m4.metric("RSI (14)", selected_data["RSI (14)"])
 
             st.divider()
 
@@ -299,10 +320,10 @@ if ticker_list:
                 rsi_bg = "white"
                 rsi_color = "black"
                 if rsi_val > 70 and rsi_val < rsi_prev:
-                    rsi_bg = "#ffcccc" # Rood (Overbought & daalt)
+                    rsi_bg = "#ffcccc"
                     rsi_color = "#990000"
                 elif rsi_val > 55:
-                    rsi_bg = "#d4edda" # Groen
+                    rsi_bg = "#d4edda"
                     rsi_color = "#155724"
 
                 st.markdown(f"""
@@ -328,7 +349,6 @@ if ticker_list:
             with col_right:
                 st.write("#### 🔍 Sentiment & Trends")
 
-                # Put/Call Status
                 pcr_val = selected_data["PCR Raw"]
                 if pcr_val is not None and not np.isnan(pcr_val):
                     pc_status = "Bullish (< 0.8) 🟢" if pcr_val < 0.8 else ("Bearish (> 1.0) 🔴" if pcr_val > 1.0 else "Neutraal 🟡")
