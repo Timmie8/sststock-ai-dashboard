@@ -22,31 +22,34 @@ def get_signal_and_color(score):
     - Onder 5.0    : AVOID (Rood)
     """
     if score >= 7.0:
-        return "BUY / LONG 🟢", "#d4edda", "#155724" # Groen (Label, BG, Text)
+        return "BUY / LONG 🟢", "#d4edda", "#155724" # Groen
     elif score >= 5.0:
-        return "WATCH 🟠", "#fff3cd", "#856404"     # Oranje (Label, BG, Text)
+        return "WATCH 🟠", "#fff3cd", "#856404"     # Oranje
     else:
-        return "AVOID 🔴", "#f8d7da", "#721c24"     # Rood (Label, BG, Text)
+        return "AVOID 🔴", "#f8d7da", "#721c24"     # Rood
 
-def calculate_composite_score(vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, stoch_d, put_call_ratio, short_float):
+def calculate_composite_score(vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, stoch_d, put_call_ratio, short_float, mfi_val, ad_trend_3d):
     """
-    Berekent de Totaal Score (1-10) op basis van 4 gewogen pijlers:
-    1. Volume Breakout (25%)
+    Berekent de Totaal Score (1-10) op basis van gewogen pijlers inclusief MFI en A/D:
+    1. Volume & Money Flow (25%)
     2. Opties / PCR (15%)
     3. Sentiment (20%)
-    4. Technische Indicatoren (40%)
+    4. Technische Indicatoren & Accumulatie (40%)
     """
-    # 1. Volume Breakout Score (25%)
-    if vol_ratio >= 2.0:
-        vol_score = 10.0
-    elif vol_ratio >= 1.5:
-        vol_score = 8.5
-    elif vol_ratio >= 1.2:
-        vol_score = 7.0
-    elif vol_ratio >= 1.0:
-        vol_score = 5.5
-    else:
-        vol_score = 3.0
+    # 1. Volume Breakout & Money Flow Score (25%)
+    vol_score = 5.0
+    if vol_ratio >= 1.5:
+        vol_score += 2.5
+    elif vol_ratio >= 1.1:
+        vol_score += 1.0
+
+    if mfi_val >= 60:
+        vol_score += 2.5
+    elif mfi_val >= 45:
+        vol_score += 1.0
+    elif mfi_val < 35:
+        vol_score -= 1.5
+    vol_score = min(10.0, max(1.0, vol_score))
 
     # 2. Opties / PCR Score (15%)
     if put_call_ratio is not None and not np.isnan(put_call_ratio):
@@ -57,7 +60,7 @@ def calculate_composite_score(vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, 
         else:
             pcr_score = 3.0  # Bearish
     else:
-        pcr_score = 5.0  # Fallback als er geen optie-data beschikbaar is
+        pcr_score = 5.0  # Fallback
 
     # 3. Sentiment Score (20%)
     sentiment_score = 5.0
@@ -70,22 +73,24 @@ def calculate_composite_score(vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, 
         sentiment_score += 1.5
     sentiment_score = min(10.0, max(1.0, sentiment_score))
 
-    # 4. Technische Indicatoren Score (40%)
+    # 4. Technische Indicatoren & Accumulatie Score (40%)
     tech_score = 5.0
     if 55 <= rsi_val <= 70:
-        tech_score += 1.5
+        tech_score += 1.0
     elif rsi_val > 70:
         tech_score -= 1.0
-    elif rsi_val < 30:
-        tech_score += 1.0
 
     if macd_val > 0 and macd_val > macd_prev:
-        tech_score += 2.0
-    elif macd_val > 0:
-        tech_score += 1.0
+        tech_score += 1.5
 
     if stoch_k > stoch_d:
+        tech_score += 1.0
+
+    # 3-daagse Accumulatie / Distributie invloed
+    if ad_trend_3d == "Accumulatie 🟢":
         tech_score += 1.5
+    elif ad_trend_3d == "Distributie 🔴":
+        tech_score -= 1.5
 
     tech_score = min(10.0, max(1.0, tech_score))
 
@@ -145,7 +150,62 @@ def analyze_stock(symbol):
         current_volume = df['Volume'].iloc[-1]
         vol_ratio = current_volume / avg_volume_20 if avg_volume_20 > 0 else 1.0
 
-        # 2. RSI (14)
+        # 2. Money Flow Index (MFI - 1 Day / 14-period indicator value)
+        typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+        raw_money_flow = typical_price * df['Volume']
+        
+        pos_flow = pd.Series(np.where(typical_price > typical_price.shift(1), raw_money_flow, 0), index=df.index)
+        neg_flow = pd.Series(np.where(typical_price < typical_price.shift(1), raw_money_flow, 0), index=df.index)
+        
+        pos_mf14 = pos_flow.rolling(14).sum()
+        neg_mf14 = neg_flow.rolling(14).sum()
+        
+        mfi = 100 - (100 / (1 + (pos_mf14 / neg_mf14)))
+        mfi_val = round(mfi.iloc[-1], 1) if not np.isnan(mfi.iloc[-1]) else 50.0
+
+        # MFI Score & Kleur
+        if mfi_val >= 60:
+            mfi_score, mfi_bg, mfi_color = round(min(10.0, 5.0 + (mfi_val - 50) / 5), 1), "#d4edda", "#155724" # Instroom / Bullish
+        elif mfi_val <= 40:
+            mfi_score, mfi_bg, mfi_color = round(max(1.0, 5.0 - (50 - mfi_val) / 5), 1), "#f8d7da", "#721c24"  # Uitstroom / Bearish
+        else:
+            mfi_score, mfi_bg, mfi_color = 5.0, "#fff3cd", "#856404"                                           # Neutraal
+
+        # 3. 3-Daagse Accumulatie / Distributie (A/D)
+        clv = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low']).replace(0, np.nan)
+        clv = clv.fillna(0)
+        ad_line = (clv * df['Volume']).cumsum()
+        
+        ad_diff_3d = ad_line.iloc[-1] - ad_line.iloc[-4]
+        if ad_diff_3d > 0:
+            ad_trend_3d = "Accumulatie 🟢"
+            ad_score, ad_bg, ad_color = 8.5, "#d4edda", "#155724"
+        elif ad_diff_3d < 0:
+            ad_trend_3d = "Distributie 🔴"
+            ad_score, ad_bg, ad_color = 3.0, "#f8d7da", "#721c24"
+        else:
+            ad_trend_3d = "Neutraal 🟡"
+            ad_score, ad_bg, ad_color = 5.0, "#fff3cd", "#856404"
+
+        # 4. Support & Resistance Bepaling (Pivot Points & Swing High/Low)
+        high_20 = df['High'].iloc[-21:-1].max()
+        low_20 = df['Low'].iloc[-21:-1].min()
+        last_close = df['Close'].iloc[-1]
+
+        # Pivots op basis van laatste gesloten dag
+        prev_high = df['High'].iloc[-2]
+        prev_low = df['Low'].iloc[-2]
+        prev_close = df['Close'].iloc[-2]
+        pivot = (prev_high + prev_low + prev_close) / 3
+        
+        resistance_1 = (2 * pivot) - prev_low
+        support_1 = (2 * pivot) - prev_high
+
+        # Gebruik de meest relevante niveaus
+        effective_resistance = min(high_20, resistance_1) if min(high_20, resistance_1) > last_close else max(high_20, resistance_1)
+        effective_support = max(low_20, support_1) if max(low_20, support_1) < last_close else min(low_20, support_1)
+
+        # 5. RSI (14)
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -154,7 +214,7 @@ def analyze_stock(symbol):
         rsi_val = df['RSI'].iloc[-1]
         rsi_prev = df['RSI'].iloc[-2]
 
-        # 3. Stochastic Oscillator
+        # 6. Stochastic Oscillator
         def calc_stoch(data, k_period=14, d_period=3):
             low_min = data['Low'].rolling(window=k_period).min()
             high_max = data['High'].rolling(window=k_period).max()
@@ -171,7 +231,7 @@ def analyze_stock(symbol):
         stoch_1h_trend = "Stijgend 🟢" if df_1h['Stoch_%K'].iloc[-1] > df_1h['Stoch_%K'].iloc[-2] else "Dalend 🔴"
         stoch_1d_trend = "Stijgend 🟢" if stoch_k > stoch_k_prev else "Dalend 🔴"
 
-        # 4. MACD
+        # 7. MACD
         ema12 = df['Close'].ewm(span=12, adjust=False).mean()
         ema26 = df['Close'].ewm(span=26, adjust=False).mean()
         df['MACD'] = ema12 - ema26
@@ -185,7 +245,7 @@ def analyze_stock(symbol):
         else:
             macd_status = "Bearish 🔴"
 
-        # 5. 3-Day Candlestick Analysis
+        # 8. 3-Day Candlestick Analysis
         c3, c2, c1 = df['Close'].iloc[-3], df['Close'].iloc[-2], df['Close'].iloc[-1]
         o3, o2, o1 = df['Open'].iloc[-3], df['Open'].iloc[-2], df['Open'].iloc[-1]
 
@@ -201,7 +261,7 @@ def analyze_stock(symbol):
         else:
             candle_signal = f"Neutraal ➖ ({total_return_3d:.1f}%)"
 
-        # 6. AI Model Simulation
+        # 9. AI Model Simulation
         mom_score = 5.0
         if macd_val > 0: mom_score += 1.5
         if stoch_k > stoch_d: mom_score += 1.5
@@ -211,9 +271,9 @@ def analyze_stock(symbol):
 
         ensemble_score = round((mom_score * 0.6) + (10 - (stoch_d * 0.05)) * 0.4, 1)
 
-        # 7. Totaal Score Berekening
+        # 10. Totaal Score Berekening
         totaal_score, vol_score, pcr_score, sent_score, tech_score = calculate_composite_score(
-            vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, stoch_d, put_call_ratio, short_float
+            vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, stoch_d, put_call_ratio, short_float, mfi_val, ad_trend_3d
         )
 
         signal, bg_color, text_color = get_signal_and_color(totaal_score)
@@ -226,6 +286,16 @@ def analyze_stock(symbol):
             "AI Ensemble": ensemble_score,
             "AI Momentum": round(mom_score, 1),
             "Volume Ratio": f"{vol_ratio:.2f}x",
+            "1D MoneyFlow": mfi_val,
+            "MFI Score": mfi_score,
+            "MFI BG": mfi_bg,
+            "MFI Color": mfi_color,
+            "3D Acc/Dist": ad_trend_3d,
+            "3D AD Score": ad_score,
+            "3D AD BG": ad_bg,
+            "3D AD Color": ad_color,
+            "Support": f"${effective_support:.2f}",
+            "Resistance": f"${effective_resistance:.2f}",
             "RSI (14)": round(rsi_val, 1),
             "RSI Raw": rsi_val,
             "RSI Prev": rsi_prev,
@@ -268,17 +338,16 @@ if ticker_list:
         
         # Weergave tabel voorbereiden
         display_cols = [
-            "Ticker", "Koers", "Totaal Score", "Advies", "AI Ensemble", "AI Momentum", 
-            "Volume Ratio", "RSI (14)", "MACD Status", "Put/Call", 
-            "Short Float", "Stoch 1H", "Stoch 1D", "3D Candles"
+            "Ticker", "Koers", "Totaal Score", "Advies", "1D MoneyFlow", "3D Acc/Dist", 
+            "Support", "Resistance", "Volume Ratio", "RSI (14)", "MACD Status", 
+            "Put/Call", "Short Float"
         ]
 
         st.dataframe(
             df_results[display_cols],
             column_config={
                 "Totaal Score": st.column_config.NumberColumn(format="%.1f 🏆"),
-                "AI Ensemble": st.column_config.NumberColumn(format="%.1f ⭐"),
-                "AI Momentum": st.column_config.NumberColumn(format="%.1f 🔥"),
+                "1D MoneyFlow": st.column_config.NumberColumn(format="%.1f MFI"),
             },
             hide_index=True,
             use_container_width=True
@@ -301,34 +370,33 @@ if ticker_list:
             """, unsafe_allow_html=True)
 
             # Top Metrics
-            m1, m2, m3, m4 = st.columns(4)
+            m1, m2, m3, m4, m5 = st.columns(5)
             m1.metric("Koers", selected_data["Koers"])
-            m2.metric("AI Ensemble", f"{selected_data['AI Ensemble']} / 10")
-            m3.metric("Volume Ratio", selected_data["Volume Ratio"])
-            m4.metric("RSI (14)", selected_data["RSI (14)"])
+            m2.metric("Support (Steun)", selected_data["Support"])
+            m3.metric("Resistance (Weerstand)", selected_data["Resistance"])
+            m4.metric("Volume Ratio", selected_data["Volume Ratio"])
+            m5.metric("RSI (14)", selected_data["RSI (14)"])
 
             st.divider()
 
             col_left, col_right = st.columns(2)
 
             with col_left:
-                st.write("#### 📊 Technische Indicatoren")
+                st.write("#### 📊 Money Flow & Accumulatie")
 
-                # RSI Custom Box
-                rsi_val = selected_data["RSI Raw"]
-                rsi_prev = selected_data["RSI Prev"]
-                rsi_bg = "white"
-                rsi_color = "black"
-                if rsi_val > 70 and rsi_val < rsi_prev:
-                    rsi_bg = "#ffcccc"
-                    rsi_color = "#990000"
-                elif rsi_val > 55:
-                    rsi_bg = "#d4edda"
-                    rsi_color = "#155724"
-
+                # 1D Money Flow Custom Box
                 st.markdown(f"""
-                <div style="background-color:{rsi_bg}; color:{rsi_color}; padding:10px; border-radius:5px; margin-bottom:10px;">
-                    <strong>RSI (14):</strong> {rsi_val:.2f}
+                <div style="background-color:{selected_data['MFI BG']}; color:{selected_data['MFI Color']}; padding:12px; border-radius:6px; margin-bottom:10px;">
+                    <strong>1D Money Flow Index (MFI):</strong> {selected_data['1D MoneyFlow']} 
+                    <br><em>Score: {selected_data['MFI Score']} / 10</em>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # 3D Acc/Dist Custom Box
+                st.markdown(f"""
+                <div style="background-color:{selected_data['3D AD BG']}; color:{selected_data['3D AD Color']}; padding:12px; border-radius:6px; margin-bottom:10px;">
+                    <strong>3-Daagse Acc / Distributie:</strong> {selected_data['3D Acc/Dist']} 
+                    <br><em>Score: {selected_data['3D AD Score']} / 10</em>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -344,10 +412,10 @@ if ticker_list:
                 </div>
                 """, unsafe_allow_html=True)
 
-                st.info(f"**MACD Status:** {selected_data['MACD Status']}")
-
             with col_right:
-                st.write("#### 🔍 Sentiment & Trends")
+                st.write("#### 🔍 Sentiment & Key Levels")
+
+                st.info(f"**MACD Status:** {selected_data['MACD Status']}")
 
                 pcr_val = selected_data["PCR Raw"]
                 if pcr_val is not None and not np.isnan(pcr_val):
@@ -364,7 +432,7 @@ if ticker_list:
             st.write("---")
             st.write("#### 🎯 Score Opbouw Breakdown")
             sc1, sc2, sc3, sc4 = st.columns(4)
-            sc1.metric("Technische Score (40%)", f"{selected_data['Tech Score']} / 10")
-            sc2.metric("Volume Breakout Score (25%)", f"{selected_data['Volume Score']} / 10")
+            sc1.metric("Technische & Acc Score (40%)", f"{selected_data['Tech Score']} / 10")
+            sc2.metric("Volume & MoneyFlow Score (25%)", f"{selected_data['Volume Score']} / 10")
             sc3.metric("Sentiment Score (20%)", f"{selected_data['Sentiment Score']} / 10")
             sc4.metric("Opties/PCR Score (15%)", f"{selected_data['PCR Score']} / 10")
