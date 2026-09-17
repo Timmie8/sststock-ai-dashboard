@@ -150,7 +150,7 @@ def analyze_stock(symbol):
         current_volume = df['Volume'].iloc[-1]
         vol_ratio = current_volume / avg_volume_20 if avg_volume_20 > 0 else 1.0
 
-        # 2. Money Flow Index (MFI - 1 Day / 14-period indicator value)
+        # 2. Money Flow Index (MFI - 1 Day) -> Omzetten naar Status & Score
         typical_price = (df['High'] + df['Low'] + df['Close']) / 3
         raw_money_flow = typical_price * df['Volume']
         
@@ -163,13 +163,16 @@ def analyze_stock(symbol):
         mfi = 100 - (100 / (1 + (pos_mf14 / neg_mf14)))
         mfi_val = round(mfi.iloc[-1], 1) if not np.isnan(mfi.iloc[-1]) else 50.0
 
-        # MFI Score & Kleur
+        # MFI Status & Score
         if mfi_val >= 60:
-            mfi_score, mfi_bg, mfi_color = round(min(10.0, 5.0 + (mfi_val - 50) / 5), 1), "#d4edda", "#155724" # Instroom / Bullish
+            mfi_status = "Bullish 🟢"
+            mfi_score, mfi_bg, mfi_color = round(min(10.0, 5.0 + (mfi_val - 50) / 5), 1), "#d4edda", "#155724"
         elif mfi_val <= 40:
-            mfi_score, mfi_bg, mfi_color = round(max(1.0, 5.0 - (50 - mfi_val) / 5), 1), "#f8d7da", "#721c24"  # Uitstroom / Bearish
+            mfi_status = "Bearish 🔴"
+            mfi_score, mfi_bg, mfi_color = round(max(1.0, 5.0 - (50 - mfi_val) / 5), 1), "#f8d7da", "#721c24"
         else:
-            mfi_score, mfi_bg, mfi_color = 5.0, "#fff3cd", "#856404"                                           # Neutraal
+            mfi_status = "Neutraal 🟡"
+            mfi_score, mfi_bg, mfi_color = 5.0, "#fff3cd", "#856404"
 
         # 3. 3-Daagse Accumulatie / Distributie (A/D)
         clv = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low']).replace(0, np.nan)
@@ -187,12 +190,11 @@ def analyze_stock(symbol):
             ad_trend_3d = "Neutraal 🟡"
             ad_score, ad_bg, ad_color = 5.0, "#fff3cd", "#856404"
 
-        # 4. Support & Resistance Bepaling (Pivot Points & Swing High/Low)
+        # 4. Support & Resistance Bepaling
         high_20 = df['High'].iloc[-21:-1].max()
         low_20 = df['Low'].iloc[-21:-1].min()
         last_close = df['Close'].iloc[-1]
 
-        # Pivots op basis van laatste gesloten dag
         prev_high = df['High'].iloc[-2]
         prev_low = df['Low'].iloc[-2]
         prev_close = df['Close'].iloc[-2]
@@ -201,7 +203,6 @@ def analyze_stock(symbol):
         resistance_1 = (2 * pivot) - prev_low
         support_1 = (2 * pivot) - prev_high
 
-        # Gebruik de meest relevante niveaus
         effective_resistance = min(high_20, resistance_1) if min(high_20, resistance_1) > last_close else max(high_20, resistance_1)
         effective_support = max(low_20, support_1) if max(low_20, support_1) < last_close else min(low_20, support_1)
 
@@ -286,7 +287,8 @@ def analyze_stock(symbol):
             "AI Ensemble": ensemble_score,
             "AI Momentum": round(mom_score, 1),
             "Volume Ratio": f"{vol_ratio:.2f}x",
-            "1D MoneyFlow": mfi_val,
+            "1D MoneyFlow Status": mfi_status,
+            "1D MoneyFlow Val": mfi_val,
             "MFI Score": mfi_score,
             "MFI BG": mfi_bg,
             "MFI Color": mfi_color,
@@ -294,6 +296,7 @@ def analyze_stock(symbol):
             "3D AD Score": ad_score,
             "3D AD BG": ad_bg,
             "3D AD Color": ad_color,
+            "3D Candles": candle_signal,
             "Support": f"${effective_support:.2f}",
             "Resistance": f"${effective_resistance:.2f}",
             "RSI (14)": round(rsi_val, 1),
@@ -309,7 +312,6 @@ def analyze_stock(symbol):
             "Stoch K Prev": stoch_k_prev,
             "Stoch 1H": stoch_1h_trend,
             "Stoch 1D": stoch_1d_trend,
-            "3D Candles": candle_signal,
             "Tech Score": tech_score,
             "Volume Score": vol_score,
             "PCR Score": pcr_score,
@@ -336,18 +338,19 @@ if ticker_list:
 
         st.subheader("📊 Multi-Stock Scan Overzicht")
         
-        # Weergave tabel voorbereiden
+        # Weergave tabel voorbereiden (Inclusief 1D MoneyFlow Status & 3D Candles)
         display_cols = [
-            "Ticker", "Koers", "Totaal Score", "Advies", "1D MoneyFlow", "3D Acc/Dist", 
-            "Support", "Resistance", "Volume Ratio", "RSI (14)", "MACD Status", 
-            "Put/Call", "Short Float"
+            "Ticker", "Koers", "Totaal Score", "Advies", "1D MoneyFlow Status", 
+            "3D Acc/Dist", "3D Candles", "Support", "Resistance", 
+            "Volume Ratio", "RSI (14)", "MACD Status", "Put/Call", "Short Float"
         ]
 
         st.dataframe(
             df_results[display_cols],
             column_config={
                 "Totaal Score": st.column_config.NumberColumn(format="%.1f 🏆"),
-                "1D MoneyFlow": st.column_config.NumberColumn(format="%.1f MFI"),
+                "1D MoneyFlow Status": st.column_config.TextColumn("1D Money Flow"),
+                "3D Candles": st.column_config.TextColumn("3D Candles"),
             },
             hide_index=True,
             use_container_width=True
@@ -384,10 +387,10 @@ if ticker_list:
             with col_left:
                 st.write("#### 📊 Money Flow & Accumulatie")
 
-                # 1D Money Flow Custom Box
+                # 1D Money Flow Custom Box (Met Status & Score)
                 st.markdown(f"""
                 <div style="background-color:{selected_data['MFI BG']}; color:{selected_data['MFI Color']}; padding:12px; border-radius:6px; margin-bottom:10px;">
-                    <strong>1D Money Flow Index (MFI):</strong> {selected_data['1D MoneyFlow']} 
+                    <strong>1D Money Flow:</strong> {selected_data['1D MoneyFlow Status']} (MFI Value: {selected_data['1D MoneyFlow Val']})
                     <br><em>Score: {selected_data['MFI Score']} / 10</em>
                 </div>
                 """, unsafe_allow_html=True)
