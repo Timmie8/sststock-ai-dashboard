@@ -35,7 +35,7 @@ def calculate_composite_score(vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, 
         vol_score = 3.0
 
     # 2. Opties / PCR Score (15%)
-    if put_call_ratio is not None:
+    if put_call_ratio is not None and not np.isnan(put_call_ratio):
         if put_call_ratio < 0.8:
             pcr_score = 9.0  # Bullish
         elif put_call_ratio <= 1.0:
@@ -43,11 +43,11 @@ def calculate_composite_score(vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, 
         else:
             pcr_score = 3.0  # Bearish
     else:
-        pcr_score = 5.0  # Fallback
+        pcr_score = 5.0  # Fallback als er geen optie-data beschikbaar is
 
     # 3. Sentiment Score (20%)
     sentiment_score = 5.0
-    if short_float is not None:
+    if short_float is not None and not np.isnan(short_float):
         if short_float < 0.05:
             sentiment_score += 2.5
         elif short_float > 0.15:
@@ -97,6 +97,38 @@ def analyze_stock(symbol):
         if df.empty or len(df) < 30:
             return None
 
+        # -------------------------------------------------------------
+        # PUT/CALL RATIO BEREKENING (VIA INFO + FALLBACK NAAR OPTION CHAIN)
+        # -------------------------------------------------------------
+        put_call_ratio = info.get('putCallRatio', None)
+        pcr_source = "Info"
+
+        if put_call_ratio is None or np.isnan(put_call_ratio):
+            try:
+                options_dates = stock.options
+                if options_dates:
+                    # Eerstvolgende optie-expiratiedatum
+                    near_option = stock.option_chain(options_dates[0])
+                    calls = near_option.calls
+                    puts = near_option.puts
+                    
+                    total_call_vol = calls['volume'].sum()
+                    total_put_vol = puts['volume'].sum()
+
+                    if total_call_vol > 0:
+                        put_call_ratio = total_put_vol / total_call_vol
+                        pcr_source = "Volume (Chain)"
+                    else:
+                        total_call_oi = calls['openInterest'].sum()
+                        total_put_oi = puts['openInterest'].sum()
+                        if total_call_oi > 0:
+                            put_call_ratio = total_put_oi / total_call_oi
+                            pcr_source = "OI (Chain)"
+            except Exception:
+                put_call_ratio = None
+
+        short_float = info.get('shortPercentOfFloat', None)
+
         # 1. Volume Ratio (vs 20-daags MA)
         avg_volume_20 = df['Volume'].rolling(window=20).mean().iloc[-1]
         current_volume = df['Volume'].iloc[-1]
@@ -111,11 +143,7 @@ def analyze_stock(symbol):
         rsi_val = df['RSI'].iloc[-1]
         rsi_prev = df['RSI'].iloc[-2]
 
-        # 3. Put/Call Ratio & Short Float
-        put_call_ratio = info.get('putCallRatio', None)
-        short_float = info.get('shortPercentOfFloat', None)
-
-        # 4. Stochastic Oscillator (Daily & Hourly)
+        # 3. Stochastic Oscillator (Daily & Hourly)
         def calc_stoch(data, k_period=14, d_period=3):
             low_min = data['Low'].rolling(window=k_period).min()
             high_max = data['High'].rolling(window=k_period).max()
@@ -133,7 +161,7 @@ def analyze_stock(symbol):
         stoch_1h_trend = "Stijgend 🟢" if df_1h['Stoch_%K'].iloc[-1] > df_1h['Stoch_%K'].iloc[-2] else "Dalend 🔴"
         stoch_1d_trend = "Stijgend 🟢" if stoch_k > stoch_k_prev else "Dalend 🔴"
 
-        # 5. MACD
+        # 4. MACD
         ema12 = df['Close'].ewm(span=12, adjust=False).mean()
         ema26 = df['Close'].ewm(span=26, adjust=False).mean()
         df['MACD'] = ema12 - ema26
@@ -147,7 +175,7 @@ def analyze_stock(symbol):
         else:
             macd_status = "Bearish 🔴"
 
-        # 6. 3-Day Candlestick Analysis
+        # 5. 3-Day Candlestick Analysis
         c3, c2, c1 = df['Close'].iloc[-3], df['Close'].iloc[-2], df['Close'].iloc[-1]
         o3, o2, o1 = df['Open'].iloc[-3], df['Open'].iloc[-2], df['Open'].iloc[-1]
 
@@ -163,7 +191,7 @@ def analyze_stock(symbol):
         else:
             candle_signal = f"Neutraal ➖ ({total_return_3d:.1f}%)"
 
-        # 7. AI Model Simulation Scores
+        # 6. AI Model Simulation Scores
         mom_score = 5.0
         if macd_val > 0: mom_score += 1.5
         if stoch_k > stoch_d: mom_score += 1.5
@@ -173,7 +201,7 @@ def analyze_stock(symbol):
 
         ensemble_score = round((mom_score * 0.6) + (10 - (stoch_d * 0.05)) * 0.4, 1)
 
-        # 8. Totaal Score Berekening
+        # 7. Totaal Score Berekening
         totaal_score, vol_score, pcr_score, sent_score, tech_score = calculate_composite_score(
             vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, stoch_d, put_call_ratio, short_float
         )
@@ -189,9 +217,10 @@ def analyze_stock(symbol):
             "RSI Raw": rsi_val,
             "RSI Prev": rsi_prev,
             "MACD Status": macd_status,
-            "Put/Call": f"{put_call_ratio:.2f}" if put_call_ratio else "N/B",
+            "Put/Call": f"{put_call_ratio:.2f}" if (put_call_ratio is not None and not np.isnan(put_call_ratio)) else "Geen Opties",
             "PCR Raw": put_call_ratio,
-            "Short Float": f"{short_float * 100:.1f}%" if short_float else "N/B",
+            "PCR Bron": pcr_source,
+            "Short Float": f"{short_float * 100:.1f}%" if (short_float is not None and not np.isnan(short_float)) else "N/B",
             "Stoch %K": round(stoch_k, 1),
             "Stoch %D": round(stoch_d, 1),
             "Stoch K Prev": stoch_k_prev,
@@ -301,11 +330,11 @@ if ticker_list:
 
                 # Put/Call Status
                 pcr_val = selected_data["PCR Raw"]
-                if pcr_val:
+                if pcr_val is not None and not np.isnan(pcr_val):
                     pc_status = "Bullish (< 0.8) 🟢" if pcr_val < 0.8 else ("Bearish (> 1.0) 🔴" if pcr_val > 1.0 else "Neutraal 🟡")
-                    st.write(f"**Put/Call Ratio:** {pcr_val:.2f} → *{pc_status}*")
+                    st.write(f"**Put/Call Ratio:** {pcr_val:.2f} (*{selected_data['PCR Bron']}*) → *{pc_status}*")
                 else:
-                    st.write("**Put/Call Ratio:** Niet beschikbaar")
+                    st.write("**Put/Call Ratio:** Geen optie-data beschikbaar")
 
                 st.write(f"**Short Float:** {selected_data['Short Float']}")
                 st.write(f"**Stochastic Trend 1 Uur:** {selected_data['Stoch 1H']}")
