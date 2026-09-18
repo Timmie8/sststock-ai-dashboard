@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 st.title("📈 Live AI & ML Swingtrade Scanner (1–5 Dagen)")
-st.caption("Geavanceerde analyse met ML-stijgingskans (3 dagen), Volume Breakouts, Money Flow, PCR en Technische Indicatoren.")
+st.caption("Geavanceerde analyse met ML-stijgingskans (3 dagen), Volume Breakouts, Short Float, Money Flow en Technische Indicatoren.")
 
 # --- SIDEBAR INPUTS ---
 st.sidebar.header("⚙️ Instellingen & Watchlist")
@@ -30,7 +30,7 @@ scan_button = st.sidebar.button("🚀 Start Live Scan", type="primary")
 # --- ML PROBABILITY & COMPOSITE SCORE ENGINE ---
 def calculate_ml_3d_probability(rsi_val, macd_diff, vol_ratio, mfi_val, ad_trend_3d, ema5, ema15, live_price):
     """
-    Berekent de ML Kans op Stijging over 3 dagen (30% - 95%) op basis van Feature Scoring.
+    Berekent de ML Kans op Stijging over 3 dagen (15% - 95%) op basis van Feature Scoring.
     """
     base_prob = 50.0  # Neutrale startkans
 
@@ -68,7 +68,6 @@ def calculate_ml_3d_probability(rsi_val, macd_diff, vol_ratio, mfi_val, ad_trend
     elif rsi_val < 35:
         base_prob += 3.0  # Oversold rebound kans
 
-    # Cap de kans tussen 15% en 95%
     final_prob = min(95.0, max(15.0, base_prob))
     return round(final_prob, 1)
 
@@ -310,9 +309,10 @@ if scan_button or tickers:
         
         st.subheader("📊 Ranking: Hoogste ML Kans op Stijging (3 Dagen)")
 
+        # Inclusief Short Float kolom in het overzicht
         display_cols = [
             "Ticker", "ML Kans Stijging (3d)", "Totaal Score", "Signaal", "Koers", "Verandering", 
-            "1D MoneyFlow", "3D Acc/Dist", "3D Candles", 
+            "Short Float", "1D MoneyFlow", "3D Acc/Dist", "3D Candles", 
             "Support", "Resistance", "Volume Ratio", "RSI", "Put/Call Ratio"
         ]
 
@@ -321,6 +321,7 @@ if scan_button or tickers:
             column_config={
                 "ML Kans Stijging (3d)": st.column_config.TextColumn("ML Kans Stijging (3d) 🎯"),
                 "Totaal Score": st.column_config.NumberColumn(format="%.1f 🏆"),
+                "Short Float": st.column_config.TextColumn("Short Float 🩳"),
             },
             hide_index=True,
             use_container_width=True
