@@ -328,9 +328,9 @@ if scan_button or tickers:
                 return 'background-color: #c62828; color: white; font-weight: bold;'
             return ''
 
-        # Pas de Styler toe op het DataFrame
-        styled_df = display_df.style.applymap(highlight_rsi, subset=['RSI']) \
-                                   .applymap(highlight_short_float, subset=['Short Float']) \
+        # Gebruik .map() in plaats van .applymap() om AttributeError te voorkomen
+        styled_df = display_df.style.map(highlight_rsi, subset=['RSI']) \
+                                   .map(highlight_short_float, subset=['Short Float']) \
                                    .format({
                                        'Short Float': '{:.1%}',
                                        'RSI': '{:.1f}'
