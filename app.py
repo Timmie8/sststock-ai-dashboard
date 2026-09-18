@@ -14,13 +14,13 @@ st.set_page_config(
 )
 
 st.title("📈 Live AI & ML Swingtrade Scanner (1–5 Dagen)")
-st.caption("Geavanceerde analyse met ML-stijgingskans (3 dagen), Volume Breakouts, Short Float, Money Flow en Technische Indicatoren.")
+st.caption("Geavanceerde analyse met ML-stijgingskans (3 dagen), Volume Breakouts, Short Float, Money Flow (StockConsultant methode) en Technische Indicatoren.")
 
 # --- SIDEBAR INPUTS ---
 st.sidebar.header("⚙️ Instellingen & Watchlist")
 user_input = st.sidebar.text_input(
     "Vul tickers in (gescheiden door komma's):",
-    value="NVDA, TSLA, AMD, PLTR, AAPL"
+    value="HOOD, NVDA, TSLA, AMD, PLTR, AAPL"
 )
 
 tickers = [t.strip().upper() for t in user_input.split(",") if t.strip()]
@@ -43,13 +43,13 @@ def calculate_ml_3d_probability(rsi_val, macd_diff, vol_ratio, mfi_val, ad_trend
     else:
         base_prob -= 6.0
 
-    # Feature 3: Volume & Money Flow (MFI)
-    if vol_ratio >= 1.5 and mfi_val >= 55:
+    # Feature 3: Volume & StockConsultant 1D Money Flow
+    if vol_ratio >= 1.2 and mfi_val >= 7.5:
         base_prob += 12.0
-    elif vol_ratio >= 1.2:
+    elif mfi_val >= 6.0:
         base_prob += 5.0
-    elif vol_ratio < 0.8:
-        base_prob -= 5.0
+    elif mfi_val <= 3.0:
+        base_prob -= 8.0
 
     # Feature 4: Accumulatie / Distributie Trend
     if ad_trend_3d == "Accumulatie 🟢":
@@ -70,14 +70,14 @@ def calculate_ml_3d_probability(rsi_val, macd_diff, vol_ratio, mfi_val, ad_trend
 
 
 def calculate_comprehensive_scores(vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, stoch_d, put_call_ratio, short_float, mfi_val, ad_trend_3d, ml_prob):
-    # 1. Volume & Money Flow Score (25%)
+    # 1. Volume & Money Flow Score (25%) - Geüpdatet voor StockConsultant MFI
     vol_score = 5.0
-    if vol_ratio >= 1.5: vol_score += 2.5
+    if vol_ratio >= 1.5: vol_score += 2.0
     elif vol_ratio >= 1.1: vol_score += 1.0
 
-    if mfi_val >= 60: vol_score += 2.5
-    elif mfi_val >= 45: vol_score += 1.0
-    elif mfi_val < 35: vol_score -= 1.5
+    if mfi_val >= 8.0: vol_score += 3.0
+    elif mfi_val >= 6.0: vol_score += 1.5
+    elif mfi_val <= 3.0: vol_score -= 2.0
     vol_score = round(min(10.0, max(1.0, vol_score)), 1)
 
     # 2. Opties / PCR Score (15%)
@@ -140,22 +140,37 @@ def get_live_swing_data(symbol):
         avg_vol_20d = df['Volume'].rolling(20).mean().iloc[-1]
         vol_ratio = current_volume / avg_vol_20d if avg_vol_20d > 0 else 1.0
         
-        # 1D Money Flow Index (MFI)
-        typical_price = (df['High'] + df['Low'] + df['Close']) / 3
-        raw_money_flow = typical_price * df['Volume']
-        pos_flow = pd.Series(np.where(typical_price > typical_price.shift(1), raw_money_flow, 0), index=df.index)
-        neg_flow = pd.Series(np.where(typical_price < typical_price.shift(1), raw_money_flow, 0), index=df.index)
-        pos_mf14 = pos_flow.rolling(14).sum()
-        neg_mf14 = neg_flow.rolling(14).sum()
-        mfi = 100 - (100 / (1 + (pos_mf14 / neg_mf14)))
-        mfi_val = round(mfi.iloc[-1], 1) if not np.isnan(mfi.iloc[-1]) else 50.0
+        # --- 1D MONEY FLOW (StockConsultant Methode) ---
+        high_today = df['High'].iloc[-1]
+        low_today = df['Low'].iloc[-1]
+        close_today = df['Close'].iloc[-1]
+        
+        # Close Location Value (CLV): Positie van sluiting binnen de dagrange (-1.0 tot +1.0)
+        day_range = high_today - low_today
+        if day_range > 0:
+            clv = ((close_today - low_today) - (high_today - close_today)) / day_range
+        else:
+            clv = 0.0
 
-        mfi_status = "Bullish 🟢" if mfi_val >= 60 else ("Bearish 🔴" if mfi_val <= 40 else "Neutraal 🟡")
+        # Bereken gewogen 1D Money Flow Score (1.0 tot 10.0)
+        mf_raw = (clv * 0.5) + (np.clip(day_change_pct / 3.0, -1, 1) * 0.3) + (np.clip((vol_ratio - 1.0), 0, 1) * 0.2)
+        mfi_val = round(np.clip((mf_raw + 1) * 4.5 + 1, 1.0, 10.0), 1)
+
+        if mfi_val >= 8.0:
+            mfi_status = f"Extreem Bullish 🚀 ({mfi_val}/10)"
+        elif mfi_val >= 6.0:
+            mfi_status = f"Bullish 🟢 ({mfi_val}/10)"
+        elif mfi_val <= 3.0:
+            mfi_status = f"Extreem Bearish 🔴 ({mfi_val}/10)"
+        elif mfi_val <= 4.5:
+            mfi_status = f"Bearish 🔴 ({mfi_val}/10)"
+        else:
+            mfi_status = f"Neutraal 🟡 ({mfi_val}/10)"
 
         # 3D Accumulatie / Distributie
-        clv = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low']).replace(0, np.nan)
-        clv = clv.fillna(0)
-        ad_line = (clv * df['Volume']).cumsum()
+        clv_series = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low']).replace(0, np.nan)
+        clv_series = clv_series.fillna(0)
+        ad_line = (clv_series * df['Volume']).cumsum()
         ad_diff_3d = ad_line.iloc[-1] - ad_line.iloc[-4]
         
         ad_trend_3d = "Accumulatie 🟢" if ad_diff_3d > 0 else ("Distributie 🔴" if ad_diff_3d < 0 else "Neutraal 🟡")
