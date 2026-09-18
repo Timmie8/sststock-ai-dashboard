@@ -264,7 +264,7 @@ def get_live_swing_data(symbol):
             "3D Candles": candle_signal,
             "Support": f"${effective_support:.2f}",
             "Resistance": f"${effective_resistance:.2f}",
-            "Volume Ratio": f"{round(vol_ratio, 2)}x",
+            "Volume Ratio Raw": vol_ratio,
             "RSI Raw": round(rsi, 1),
             "EMA Trend": "Bullish" if ema5 > ema15 else "Bearish",
             "Put/Call Ratio": f"{round(pcr_volume, 2)} ({pcr_status})" if pcr_volume else "N/B",
@@ -307,12 +307,13 @@ if scan_button or tickers:
         display_df = df_res[[
             "Ticker", "ML Kans Stijging (3d)", "Totaal Score", "Signaal", "Koers", "Verandering", 
             "RSI Raw", "Short Float Raw", "1D MoneyFlow", "3D Acc/Dist", "3D Candles", 
-            "Support", "Resistance", "Volume Ratio", "Put/Call Ratio"
+            "Support", "Resistance", "Volume Ratio Raw", "Put/Call Ratio"
         ]].copy()
 
         display_df.rename(columns={
             "RSI Raw": "RSI",
-            "Short Float Raw": "Short Float"
+            "Short Float Raw": "Short Float",
+            "Volume Ratio Raw": "Volume Ratio"
         }, inplace=True)
 
         # STYLING FUNCTIES FOR VAKJES KLEUREN
@@ -328,12 +329,20 @@ if scan_button or tickers:
                 return 'background-color: #c62828; color: white; font-weight: bold;'
             return ''
 
-        # Gebruik .map() in plaats van .applymap() om AttributeError te voorkomen
+        def highlight_volume_ratio(val):
+            """Kleurt Volume Ratio vakje groen als hoger dan 1.0"""
+            if pd.notnull(val) and val > 1.0:
+                return 'background-color: #2e7d32; color: white; font-weight: bold;'
+            return ''
+
+        # Pas de Styler toe met .map() op het DataFrame
         styled_df = display_df.style.map(highlight_rsi, subset=['RSI']) \
                                    .map(highlight_short_float, subset=['Short Float']) \
+                                   .map(highlight_volume_ratio, subset=['Volume Ratio']) \
                                    .format({
                                        'Short Float': '{:.1%}',
-                                       'RSI': '{:.1f}'
+                                       'RSI': '{:.1f}',
+                                       'Volume Ratio': '{:.2f}x'
                                    })
 
         st.dataframe(
@@ -362,4 +371,4 @@ if scan_button or tickers:
 
                 st.write("---")
                 st.write(f"**Support:** {item['Support']} | **Resistance:** {item['Resistance']}")
-                st.write(f"**Sector:** {item['Sector']} | **EMA Trend:** {item['EMA Trend']} | **Volume Ratio:** {item['Volume Ratio']} | **Short Float:** {item['Short Float Raw']:.1%}")
+                st.write(f"**Sector:** {item['Sector']} | **EMA Trend:** {item['EMA Trend']} | **Volume Ratio:** {item['Volume Ratio Raw']:.2f}x | **Short Float:** {item['Short Float Raw']:.1%}")
