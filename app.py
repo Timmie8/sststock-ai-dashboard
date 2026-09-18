@@ -29,9 +29,6 @@ scan_button = st.sidebar.button("🚀 Start Live Scan", type="primary")
 
 # --- ML PROBABILITY & COMPOSITE SCORE ENGINE ---
 def calculate_ml_3d_probability(rsi_val, macd_diff, vol_ratio, mfi_val, ad_trend_3d, ema5, ema15, live_price):
-    """
-    Berekent de ML Kans op Stijging over 3 dagen (15% - 95%) op basis van Feature Scoring.
-    """
     base_prob = 50.0  # Neutrale startkans
 
     # Feature 1: Trend Alignment (EMA 5 vs 15 vs Price)
@@ -64,18 +61,15 @@ def calculate_ml_3d_probability(rsi_val, macd_diff, vol_ratio, mfi_val, ad_trend
     if 48 <= rsi_val <= 62:
         base_prob += 7.0
     elif rsi_val > 70:
-        base_prob -= 8.0  # Overbought risico
+        base_prob -= 8.0  
     elif rsi_val < 35:
-        base_prob += 3.0  # Oversold rebound kans
+        base_prob += 3.0  
 
     final_prob = min(95.0, max(15.0, base_prob))
     return round(final_prob, 1)
 
 
 def calculate_comprehensive_scores(vol_ratio, rsi_val, macd_val, macd_prev, stoch_k, stoch_d, put_call_ratio, short_float, mfi_val, ad_trend_3d, ml_prob):
-    """
-    Berekent de sub-scores (1-10) en telt deze op tot de Totaal AI Score.
-    """
     # 1. Volume & Money Flow Score (25%)
     vol_score = 5.0
     if vol_ratio >= 1.5: vol_score += 2.5
@@ -264,16 +258,16 @@ def get_live_swing_data(symbol):
             "ML Prob Raw": ml_prob_3d,
             "Totaal Score": total_score,
             "Signaal": "BUY / LONG 🟢" if total_score >= 7.0 else ("WATCH 🟠" if total_score >= 5.0 else "AVOID / SHORT 🔴"),
+            "Short Float Raw": short_pct,
             "1D MoneyFlow": mfi_status,
             "3D Acc/Dist": ad_trend_3d,
             "3D Candles": candle_signal,
             "Support": f"${effective_support:.2f}",
             "Resistance": f"${effective_resistance:.2f}",
             "Volume Ratio": f"{round(vol_ratio, 2)}x",
-            "RSI": round(rsi, 1),
+            "RSI Raw": round(rsi, 1),
             "EMA Trend": "Bullish" if ema5 > ema15 else "Bearish",
             "Put/Call Ratio": f"{round(pcr_volume, 2)} ({pcr_status})" if pcr_volume else "N/B",
-            "Short Float": f"{round(short_pct * 100, 1)}%",
             "Tech Score": tech_score,
             "Volume Score": vol_score,
             "PCR Score": pcr_score,
@@ -309,20 +303,41 @@ if scan_button or tickers:
         
         st.subheader("📊 Ranking: Hoogste ML Kans op Stijging (3 Dagen)")
 
-        # Inclusief Short Float kolom in het overzicht
-        display_cols = [
+        # Kolommen voor weergave insluiten
+        display_df = df_res[[
             "Ticker", "ML Kans Stijging (3d)", "Totaal Score", "Signaal", "Koers", "Verandering", 
-            "Short Float", "1D MoneyFlow", "3D Acc/Dist", "3D Candles", 
-            "Support", "Resistance", "Volume Ratio", "RSI", "Put/Call Ratio"
-        ]
+            "RSI Raw", "Short Float Raw", "1D MoneyFlow", "3D Acc/Dist", "3D Candles", 
+            "Support", "Resistance", "Volume Ratio", "Put/Call Ratio"
+        ]].copy()
+
+        display_df.rename(columns={
+            "RSI Raw": "RSI",
+            "Short Float Raw": "Short Float"
+        }, inplace=True)
+
+        # STYLING FUNCTIES FOR VAKJES KLEUREN
+        def highlight_rsi(val):
+            """Kleurt RSI vakje groen als boven 55"""
+            if pd.notnull(val) and val > 55:
+                return 'background-color: #2e7d32; color: white; font-weight: bold;'
+            return ''
+
+        def highlight_short_float(val):
+            """Kleurt Short Float vakje rood als boven 10% (0.10)"""
+            if pd.notnull(val) and val > 0.10:
+                return 'background-color: #c62828; color: white; font-weight: bold;'
+            return ''
+
+        # Pas de Styler toe op het DataFrame
+        styled_df = display_df.style.applymap(highlight_rsi, subset=['RSI']) \
+                                   .applymap(highlight_short_float, subset=['Short Float']) \
+                                   .format({
+                                       'Short Float': '{:.1%}',
+                                       'RSI': '{:.1f}'
+                                   })
 
         st.dataframe(
-            df_res[display_cols],
-            column_config={
-                "ML Kans Stijging (3d)": st.column_config.TextColumn("ML Kans Stijging (3d) 🎯"),
-                "Totaal Score": st.column_config.NumberColumn(format="%.1f 🏆"),
-                "Short Float": st.column_config.TextColumn("Short Float 🩳"),
-            },
+            styled_df,
             hide_index=True,
             use_container_width=True
         )
@@ -347,4 +362,4 @@ if scan_button or tickers:
 
                 st.write("---")
                 st.write(f"**Support:** {item['Support']} | **Resistance:** {item['Resistance']}")
-                st.write(f"**Sector:** {item['Sector']} | **EMA Trend:** {item['EMA Trend']} | **Volume Ratio:** {item['Volume Ratio']} | **Short Float:** {item['Short Float']}")
+                st.write(f"**Sector:** {item['Sector']} | **EMA Trend:** {item['EMA Trend']} | **Volume Ratio:** {item['Volume Ratio']} | **Short Float:** {item['Short Float Raw']:.1%}")
